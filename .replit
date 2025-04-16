@@ -1,0 +1,36 @@
+run = "npm run start"
+entrypoint = "server.js"
+
+[env]
+PORT = "3000"
+
+[nix]
+channel = "stable-22_11"
+
+# Install system dependencies
+[nix.packages]
+packages = [
+  "ffmpeg",
+  "python3",
+  "python3Packages.pip"
+]
+
+[packager]
+language = "nodejs"
+
+[packager.features]
+packageSearch = true
+guessImports = true
+enabledForHosting = true
+
+[languages]
+
+[languages.javascript]
+pattern = "**/{*.js,*.jsx,*.ts,*.tsx}"
+
+[languages.javascript.languageServer]
+start = "typescript-language-server --stdio"
+
+[deployment]
+run = ["sh", "-c", "npm run start"]
+deploymentTarget = "cloudrun"
