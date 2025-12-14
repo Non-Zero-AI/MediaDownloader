@@ -101,7 +101,6 @@ const Settings: React.FC = () => {
   };
 
   const handleSubscription = async () => {
-    const { session } = useAuth();
     const apiUrl = window.location.origin;
     
     const headers: HeadersInit = {

@@ -115,7 +115,11 @@ async function getVideoInfo(url) {
       title: info.title,
       duration: info.duration,
       thumbnail: info.thumbnail,
-      formats: info.formats
+      formats: info.formats,
+      description: info.description || null,
+      uploader: info.uploader || info.channel || null,
+      view_count: info.view_count || null,
+      upload_date: info.upload_date || null,
     };
   } catch (error) {
     console.error('Error getting video info:', error);
@@ -162,6 +166,45 @@ async function verifyUser(authHeader) {
     return null;
   }
 }
+
+// Get video metadata endpoint (without downloading)
+app.post('/api/video-metadata', async (req, res) => {
+  try {
+    const { url } = req.body;
+
+    if (!url) {
+      return res.status(400).json({ success: false, message: 'URL is required' });
+    }
+
+    const info = await getVideoInfo(url);
+    
+    // Format upload_date from YYYYMMDD to ISO string if available
+    let uploadDate = null;
+    if (info.upload_date) {
+      // yt-dlp returns upload_date as YYYYMMDD string
+      const year = info.upload_date.substring(0, 4);
+      const month = info.upload_date.substring(4, 6);
+      const day = info.upload_date.substring(6, 8);
+      uploadDate = new Date(`${year}-${month}-${day}`).toISOString();
+    }
+    
+    res.json({
+      title: info.title,
+      duration: info.duration,
+      thumbnail: info.thumbnail,
+      description: info.description || null,
+      uploader: info.uploader || null,
+      viewCount: info.view_count || null,
+      uploadDate: uploadDate,
+    });
+  } catch (error) {
+    console.error('Error fetching video metadata:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || 'Failed to fetch video metadata' 
+    });
+  }
+});
 
 // Process video endpoint
 app.post('/api/process-media', async (req, res) => {

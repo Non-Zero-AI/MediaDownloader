@@ -41,9 +41,9 @@ const Auth: React.FC<AuthProps> = ({ onClose }) => {
   };
 
   return (
-    <div className="bg-white/10 backdrop-blur-lg rounded-xl p-8 shadow-2xl max-w-md w-full">
+    <div className="bg-white/10 backdrop-blur-lg rounded-xl p-8 shadow-2xl max-w-md w-full mx-auto">
       <div className="text-center mb-6">
-        <h2 className="text-2xl font-bold mb-2">
+        <h2 className="text-2xl font-bold mb-2 text-white">
           {isSignUp ? 'Create Account' : 'Sign In'}
         </h2>
         <p className="text-gray-300 text-sm">
