@@ -19,5 +19,6 @@ export default defineConfig({
     port: 5174,
   },
   // Ensure proper base path for assets in production
-  base: './',
+  // GitHub Pages base path
+  base: process.env.NODE_ENV === 'production' ? '/YouTube-Downloader-AI/' : '/',
 });
