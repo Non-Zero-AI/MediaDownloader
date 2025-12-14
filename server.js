@@ -7,6 +7,8 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
+import { createClient } from '@supabase/supabase-js';
+import Stripe from 'stripe';
 import { convertVttToDoc } from './utils/vtt-to-doc.js';
 import { sendFileToGoogleDrive } from './utils/google-drive-webhook.js';
 import { execSync } from 'child_process';
@@ -43,6 +45,16 @@ try {
 // Initialize OpenAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
+});
+
+// Initialize Supabase
+const supabaseUrl = process.env.SUPABASE_URL || 'http://127.0.0.1:54321';
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+// Initialize Stripe
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
+  apiVersion: '2024-12-18.acacia',
 });
 
 const __filename = fileURLToPath(import.meta.url);
@@ -135,10 +147,28 @@ async function transcribeAudio(audioPath) {
   }
 }
 
+// Helper function to verify JWT token and get user
+async function verifyUser(authHeader) {
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null;
+  }
+  
+  const token = authHeader.substring(7);
+  try {
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error) return null;
+    return user;
+  } catch (error) {
+    return null;
+  }
+}
+
 // Process video endpoint
 app.post('/api/process-media', async (req, res) => {
   try {
-    const { url, type, voiceIsolation } = req.body;
+    const { url, type, voiceIsolation, userId } = req.body;
+    const authHeader = req.headers.authorization;
+    const user = userId ? await verifyUser(authHeader) : null;
 
     if (!url || !type) {
       return res.status(400).json({ success: false, message: 'Missing required fields' });
@@ -366,16 +396,96 @@ ${transcription}
     // Get the host from the request or use localhost as fallback
     const host = req.get('host') || `localhost:${port}`;
     const protocol = req.protocol || 'http';
+    const fullFileUrl = `${protocol}://${host}${outputUrl}`;
+    
+    // Save to knowledge base if user is authenticated
+    let mediaItemId = null;
+    let transcriptId = null;
+    
+    if (user && userId) {
+      try {
+        // Get file stats
+        const fileStats = fs.statSync(outputPath);
+        
+        // Save media item
+        const { data: mediaItem, error: mediaError } = await supabase
+          .from('media_items')
+          .insert({
+            user_id: userId,
+            title: info.title,
+            source_url: url,
+            media_type: type,
+            file_url: fullFileUrl,
+            file_path: outputPath,
+            thumbnail_url: info.thumbnail,
+            duration: info.duration,
+            file_size: fileStats.size,
+            metadata: { formats: info.formats }
+          })
+          .select()
+          .single();
+        
+        if (!mediaError && mediaItem) {
+          mediaItemId = mediaItem.id;
+          
+          // If text type, also save transcript
+          if (type === 'text') {
+            let transcriptContent = '';
+            let vttContent = null;
+            let transcriptionMethod = 'subtitles';
+            
+            // Get transcription content if available
+            if (typeof transcription !== 'undefined' && transcription) {
+              transcriptContent = transcription;
+              transcriptionMethod = 'whisper';
+            } else if (vttPath && fs.existsSync(vttPath)) {
+              vttContent = fs.readFileSync(vttPath, 'utf8');
+              // Extract text from VTT
+              const textLines = vttContent.split('\n')
+                .filter(line => !line.match(/^\d+:\d+:\d+/))
+                .filter(line => line.trim() !== '' && !line.startsWith('WEBVTT'));
+              transcriptContent = textLines.join('\n');
+            }
+            
+            if (transcriptContent) {
+              const docxUrl = docPath ? fullFileUrl : null;
+              const { data: transcript, error: transcriptError } = await supabase
+                .from('transcripts')
+                .insert({
+                  user_id: userId,
+                  media_item_id: mediaItemId,
+                  content: transcriptContent,
+                  vtt_content: vttContent,
+                  docx_file_url: docxUrl,
+                  transcription_method: transcriptionMethod
+                })
+                .select()
+                .single();
+              
+              if (!transcriptError && transcript) {
+                transcriptId = transcript.id;
+              }
+            }
+          }
+        }
+      } catch (dbError) {
+        console.error('Error saving to knowledge base:', dbError);
+        // Continue even if database save fails
+      }
+    }
     
     return res.json({
       success: true,
       message,
-      fileUrl: `${protocol}://${host}${outputUrl}`,
+      fileUrl: fullFileUrl,
       mediaInfo: {
         title: info.title,
         duration: String(info.duration),
         thumbnail: info.thumbnail
-      }
+      },
+      savedToKnowledgeBase: !!mediaItemId,
+      mediaItemId,
+      transcriptId
     });
   } catch (error) {
     console.error('Error processing media:', error);
@@ -490,6 +600,215 @@ app.post('/api/webhook/google-drive', async (req, res) => {
       message: error.message || 'Failed to send file to Google Drive'
     });
   }
+});
+
+// Chat API endpoint
+app.post('/api/chat', async (req, res) => {
+  try {
+    const { conversationId, message, contextMediaIds, contextTranscriptIds } = req.body;
+    const authHeader = req.headers.authorization;
+    const user = await verifyUser(authHeader);
+
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    if (!message || !conversationId) {
+      return res.status(400).json({ success: false, message: 'Missing required fields' });
+    }
+
+    // Get user's API key preference
+    let apiKey = process.env.OPENAI_API_KEY;
+    let model = 'gpt-4o-mini';
+    
+    try {
+      const { data: userApiKeys } = await supabase
+        .from('user_api_keys')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('provider', 'openai')
+        .eq('is_active', true)
+        .single();
+      
+      if (userApiKeys) {
+        // In production, decrypt the API key
+        apiKey = userApiKeys.api_key_encrypted;
+      }
+    } catch (error) {
+      console.log('Using default API key');
+    }
+
+    if (!apiKey) {
+      return res.status(400).json({ success: false, message: 'No API key available' });
+    }
+
+    // Build context from transcripts if provided
+    let contextMessages = [];
+    if (contextTranscriptIds && contextTranscriptIds.length > 0) {
+      const { data: transcripts } = await supabase
+        .from('transcripts')
+        .select('content')
+        .in('id', contextTranscriptIds)
+        .eq('user_id', user.id);
+      
+      if (transcripts && transcripts.length > 0) {
+        const contextText = transcripts.map(t => t.content).join('\n\n');
+        contextMessages.push({
+          role: 'system',
+          content: `You are a helpful AI assistant. Here is context from the user's knowledge base:\n\n${contextText.substring(0, 8000)}`
+        });
+      }
+    }
+
+    // Create OpenAI client with user's API key
+    const userOpenAI = new OpenAI({ apiKey });
+
+    // Get conversation history
+    const { data: history } = await supabase
+      .from('chat_messages')
+      .select('*')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: true })
+      .limit(20);
+
+    const messages = [
+      ...contextMessages,
+      ...(history || []).map(msg => ({
+        role: msg.role,
+        content: msg.content
+      })),
+      { role: 'user', content: message }
+    ];
+
+    // Call OpenAI
+    const completion = await userOpenAI.chat.completions.create({
+      model,
+      messages,
+      temperature: 0.7,
+    });
+
+    const assistantMessage = completion.choices[0].message.content;
+
+    return res.json({
+      success: true,
+      message: assistantMessage,
+      metadata: {
+        model,
+        tokens: completion.usage?.total_tokens,
+        promptTokens: completion.usage?.prompt_tokens,
+        completionTokens: completion.usage?.completion_tokens
+      }
+    });
+  } catch (error) {
+    console.error('Error in chat API:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to process chat message'
+    });
+  }
+});
+
+// Stripe: Create checkout session
+app.post('/api/create-checkout-session', async (req, res) => {
+  try {
+    const { userId, tier } = req.body;
+    const authHeader = req.headers.authorization;
+    const user = await verifyUser(authHeader);
+
+    if (!user || user.id !== userId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return res.status(500).json({ success: false, message: 'Stripe not configured' });
+    }
+
+    const priceMap = {
+      pro: process.env.STRIPE_PRO_PRICE_ID || 'price_pro_monthly',
+      enterprise: process.env.STRIPE_ENTERPRISE_PRICE_ID || 'price_enterprise_monthly'
+    };
+
+    const priceId = priceMap[tier];
+    if (!priceId) {
+      return res.status(400).json({ success: false, message: 'Invalid tier' });
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      customer_email: user.email,
+      payment_method_types: ['card'],
+      line_items: [
+        {
+          price: priceId,
+          quantity: 1,
+        },
+      ],
+      mode: 'subscription',
+      success_url: `${req.headers.origin || 'http://localhost:3000'}/settings?success=true`,
+      cancel_url: `${req.headers.origin || 'http://localhost:3000'}/settings?canceled=true`,
+      metadata: {
+        userId: userId,
+        tier: tier
+      }
+    });
+
+    return res.json({ success: true, url: session.url });
+  } catch (error) {
+    console.error('Error creating checkout session:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to create checkout session'
+    });
+  }
+});
+
+// Stripe: Webhook handler
+app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  if (!webhookSecret) {
+    return res.status(400).send('Webhook secret not configured');
+  }
+
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+  } catch (err) {
+    console.error('Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // Handle the event
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const userId = session.metadata?.userId;
+    const tier = session.metadata?.tier;
+
+    if (userId && tier) {
+      await supabase
+        .from('user_profiles')
+        .update({
+          subscription_tier: tier,
+          subscription_status: 'active',
+          stripe_customer_id: session.customer,
+          stripe_subscription_id: session.subscription
+        })
+        .eq('id', userId);
+    }
+  } else if (event.type === 'customer.subscription.deleted') {
+    const subscription = event.data.object;
+    
+    await supabase
+      .from('user_profiles')
+      .update({
+        subscription_status: 'canceled',
+        subscription_tier: 'free'
+      })
+      .eq('stripe_subscription_id', subscription.id);
+  }
+
+  res.json({ received: true });
 });
 
 // Start server
