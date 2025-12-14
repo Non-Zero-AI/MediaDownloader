@@ -7,6 +7,7 @@ import Auth from './components/Auth';
 import KnowledgeBase from './components/KnowledgeBase';
 import AIChat from './components/AIChat';
 import SettingsPage from './components/Settings';
+import ErrorBoundary from './components/ErrorBoundary';
 
 interface DownloadState {
   url: string;
@@ -393,47 +394,53 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 }
 
 function App() {
+  React.useEffect(() => {
+    console.log('App mounted successfully');
+  }, []);
+
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 text-white">
-          <Navigation />
-          <Routes>
-            <Route path="/" element={<DownloaderPage />} />
-            <Route
-              path="/knowledge-base"
-              element={
-                <ProtectedRoute>
-                  <div className="container mx-auto px-4 py-8">
-                    <KnowledgeBase />
-                  </div>
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/chat"
-              element={
-                <ProtectedRoute>
-                  <div className="container mx-auto px-4 py-8">
-                    <AIChat />
-                  </div>
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/settings"
-              element={
-                <ProtectedRoute>
-                  <div className="container mx-auto px-4 py-8">
-                    <SettingsPage />
-                  </div>
-                </ProtectedRoute>
-              }
-            />
-          </Routes>
-        </div>
-      </BrowserRouter>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <BrowserRouter>
+          <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 text-white">
+            <Navigation />
+            <Routes>
+              <Route path="/" element={<DownloaderPage />} />
+              <Route
+                path="/knowledge-base"
+                element={
+                  <ProtectedRoute>
+                    <div className="container mx-auto px-4 py-8">
+                      <KnowledgeBase />
+                    </div>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/chat"
+                element={
+                  <ProtectedRoute>
+                    <div className="container mx-auto px-4 py-8">
+                      <AIChat />
+                    </div>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/settings"
+                element={
+                  <ProtectedRoute>
+                    <div className="container mx-auto px-4 py-8">
+                      <SettingsPage />
+                    </div>
+                  </ProtectedRoute>
+                }
+              />
+            </Routes>
+          </div>
+        </BrowserRouter>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
 
