@@ -20,5 +20,5 @@ export default defineConfig({
   },
   // Ensure proper base path for assets in production
   // GitHub Pages base path
-  base: process.env.NODE_ENV === 'production' ? '/YouTube-Downloader-AI/' : '/',
+  base: process.env.NODE_ENV === 'production' ? '/MediaDownloader/' : '/',
 });
