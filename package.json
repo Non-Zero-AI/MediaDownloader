@@ -17,6 +17,8 @@
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
+    "@stripe/stripe-js": "^8.5.3",
+    "@supabase/supabase-js": "^2.87.1",
     "cors": "^2.8.5",
     "docx": "^9.3.0",
     "dotenv": "^16.4.7",
@@ -27,6 +29,8 @@
     "openai": "^4.90.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-router-dom": "^7.10.1",
+    "stripe": "^20.0.0",
     "vtt-to-json": "^0.1.1",
     "yt-dlp-exec": "^1.0.2",
     "yt-dlp-wrap": "^2.3.12"
